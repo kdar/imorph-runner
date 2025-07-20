@@ -1,0 +1,6 @@
+region = "Global"                       # "Global", "China". Defaults to "Global".
+flavor = "Retail"                       # "Retail", "Classic", "Classic Era". Defaults to "Retail".
+name = "iMorph Net"                     # "iMorph", "iMorph Net", "iMorph Menu". Defaults to "iMorph Net".
+output_directory = "download"           # Defaults to "download".
+mega_get = "mega-get.bat"               # Path to the mega-get.bat from MEGAcmd. Defaults to "mega-get.bat".
+api = "https://www.imorph.dev/api/apps" # URI to API. Defaults to "https://www.imorph.dev/api/apps".

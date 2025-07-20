@@ -113,7 +113,7 @@ fn init_tracing() {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
   init_tracing();
 
-  let cfg_file = "imorph-runner.toml";
+  let cfg_file = "config.toml";
 
   info!(path = cfg_file, "Loading config");
   let cfg = config::load(cfg_file)?;
