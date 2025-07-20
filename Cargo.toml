@@ -1,14 +1,17 @@
 [package]
 name = "imorph-runner"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 authors = ["Kevin Darlington <kevin@outroot.com>"]
 readme = "README.md"
 repository = "https://github.com/kdar/imorph-runner"
 homepage = "https://github.com/kdar/imorph-runner"
-license = "MIT"
 license-file = "LICENSE"
 keywords = ["imorph", "updater", "runner"]
+build = "build.rs"
+
+[build-dependencies]
+winresource = "0.1"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
@@ -26,3 +29,15 @@ time = { version = "0.3.41", features = ["macros"] }
 [profile.dist]
 inherits = "release"
 lto = "thin"
+
+[package.metadata.winresource]
+OriginalFilename = "imorph-runner.exe"
+LegalCopyright = "Copyright 2025 Kevin Darlington. MIT licensed."
+FileDescription = "iMorph runner"
+ProductName = "Morph runner"
+
+[package.metadata.wix]
+upgrade-guid = "0E23EE5C-6FF8-40F5-A742-E5699B5067D8"
+path-guid = "2BCBF440-ECDE-4B74-B47C-EE9EFA92BC0A"
+license = false
+eula = false
