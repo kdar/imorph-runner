@@ -14,9 +14,13 @@ iMorph-runner is a utility for managing and launching iMorph. It checks for upda
 
 You must download and install [MEGAcmd](https://mega.io/cmd). Either ensure mega-get.bat is in your PATH, or configure mega_get to be the full path in config.toml.
 
+## Installation
+
+Download the imorph-runner-\*.zip file from https://github.com/kdar/imorph-runner/releases/latest and unzip it somewhere.
+
 ## Usage
 
-Just run the program by double clicking it or running imorph-runner.exe in the terminal.
+Run the program by double clicking it or running imorph-runner.exe in the terminal.
 
 ## Configuration
 
