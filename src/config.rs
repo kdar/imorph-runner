@@ -1,4 +1,4 @@
-use std::fs;
+use std::{fs, io};
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
@@ -28,7 +28,17 @@ impl Default for Config {
 }
 
 pub fn load(path: &str) -> Result<Config, Box<dyn std::error::Error>> {
-  let toml_str = fs::read_to_string(path).context("Could not read config")?;
+  let toml_str = match fs::read_to_string(path) {
+    Ok(content) => content,
+    Err(error) => {
+      if error.kind() == io::ErrorKind::NotFound {
+        return Ok(Config::default());
+      } else {
+        return Err(Box::new(error));
+      }
+    },
+  };
+
   let config: Config = toml::from_str(&toml_str).context("Could not parse config")?;
   Ok(config)
 }
