@@ -109,8 +109,29 @@ fn init_tracing() {
     .init();
 }
 
+#[cfg(windows)]
+fn enable_ansi_support() {
+  use std::io::{self};
+
+  use windows_sys::Win32::System::Console::{
+    ENABLE_VIRTUAL_TERMINAL_PROCESSING, GetConsoleMode, GetStdHandle, STD_OUTPUT_HANDLE,
+    SetConsoleMode,
+  };
+
+  unsafe {
+    let handle = GetStdHandle(STD_OUTPUT_HANDLE);
+    let mut mode = 0;
+    if GetConsoleMode(handle, &mut mode) != 0 {
+      SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+    }
+  }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+  #[cfg(windows)]
+  enable_ansi_support();
+
   init_tracing();
 
   let cfg_file = "config.toml";
