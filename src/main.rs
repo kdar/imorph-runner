@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fs::File, io, path::Path, process::Stdio, time::Duration};
+use std::{collections::HashMap, fs::File, io, path::Path, process::Stdio};
 
 use anyhow::{Context, Result};
 use reqwest;
@@ -8,13 +8,14 @@ use tokio::{
   fs,
   io::{AsyncBufReadExt as _, AsyncReadExt, AsyncWriteExt, BufReader},
   process::Command,
-  time::sleep,
 };
 use tracing::info;
 use tracing_subscriber::fmt::time::OffsetTime;
 use zip::{read::ZipArchive, result::ZipResult};
 
 mod config;
+mod patch;
+mod pty;
 
 #[derive(Debug, Deserialize)]
 struct ImorphEntry {
@@ -61,11 +62,13 @@ fn unzip_file(zip_path: impl AsRef<Path>, extract_to: &str) -> ZipResult<()> {
 pub async fn run_command(
   command: impl AsRef<std::ffi::OsStr>,
   args: &[&str],
-) -> io::Result<std::process::ExitStatus> {
+) -> Result<std::process::ExitStatus> {
   let mut child = Command::new(command)
     .args(args)
     .stdout(Stdio::piped())
     .stderr(Stdio::piped())
+    // .stdout(Stdio::inherit())
+    // .stderr(Stdio::inherit())
     .spawn()?;
 
   let stdout = child.stdout.take().expect("Failed to capture stdout");
@@ -74,7 +77,23 @@ pub async fn run_command(
   let mut stdout_reader = BufReader::new(stdout).lines();
   let mut stderr_reader = BufReader::new(stderr).lines();
 
-  // Spawn tasks to read stdout and stderr simultaneously
+  // let stdout_task = tokio::spawn(async move {
+  //   let mut buf = [0; 1024];
+  //   loop {
+  //     match stdout.read(&mut buf).await {
+  //       Ok(0) => break, // EOF
+  //       Ok(n) => {
+  //         let chunk = String::from_utf8_lossy(&buf[..n]);
+  //         print!("[stdout] {}", chunk);
+  //       },
+  //       Err(e) => {
+  //         eprintln!("Error reading stdout: {}", e);
+  //         break;
+  //       },
+  //     }
+  //   }
+  // });
+
   let stdout_task = tokio::spawn(async move {
     while let Ok(Some(line)) = stdout_reader.next_line().await {
       info!("[imorph] {}", line);
@@ -87,9 +106,9 @@ pub async fn run_command(
     }
   });
 
-  let status = child.wait().await?;
   stdout_task.await?;
   stderr_task.await?;
+  let status = child.wait().await?;
 
   Ok(status)
 }
@@ -110,27 +129,30 @@ fn init_tracing() {
 }
 
 #[cfg(windows)]
-fn enable_ansi_support() {
-  use std::io::{self};
-
-  use windows_sys::Win32::System::Console::{
-    ENABLE_VIRTUAL_TERMINAL_PROCESSING, GetConsoleMode, GetStdHandle, STD_OUTPUT_HANDLE,
-    SetConsoleMode,
+pub fn enable_ansi_support() -> Result<()> {
+  use windows::Win32::{
+    Foundation::HANDLE,
+    System::Console::{
+      CONSOLE_MODE, ENABLE_VIRTUAL_TERMINAL_PROCESSING, GetConsoleMode, GetStdHandle,
+      STD_OUTPUT_HANDLE, SetConsoleMode,
+    },
   };
 
   unsafe {
-    let handle = GetStdHandle(STD_OUTPUT_HANDLE);
-    let mut mode = 0;
-    if GetConsoleMode(handle, &mut mode) != 0 {
-      SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
-    }
+    let handle: HANDLE = GetStdHandle(STD_OUTPUT_HANDLE)?;
+
+    let mut mode = CONSOLE_MODE::default();
+    GetConsoleMode(handle, &mut mode)?;
+    SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING)?;
+
+    Ok(())
   }
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
   #[cfg(windows)]
-  enable_ansi_support();
+  enable_ansi_support()?;
 
   init_tracing();
 
@@ -176,15 +198,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   };
 
   if installed_version.trim() == &entry.wow_version {
+    // patch::patch_specific_sleep_call("download/RuniMorph.exe")?;
     info!(
       version = installed_version.trim(),
       "Latest iMorph already downloaded"
     );
-    info!(path = "RuniMorph.exe", "Running iMorph");
-    run_command(output_dir.join("RuniMorph.exe"), &[])
-      .await
-      .context("Failed to run command")?;
-    sleep(Duration::from_secs(2)).await;
+    let cmd_path = output_dir.join("RuniMorph.exe");
+    info!(path = cmd_path.to_str(), "Running iMorph");
+    pty::run_command(cmd_path, &[]).context("Failed to run command")?;
     return Ok(());
   }
 
@@ -196,13 +217,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   info!(
     cmd = format!(
-      "{} {}",
+      "{} {} {}",
       &cfg.mega_get,
+      &entry.url,
       output_dir.join("download.zip").to_str().unwrap(),
     ),
     "Running mega-get"
   );
-  let mut cmd = Command::new(&cfg.mega_get);
+  let mut cmd: Command = Command::new(&cfg.mega_get);
   cmd
     .arg(&entry.url)
     .arg(output_dir.join("download.zip"))
@@ -218,7 +240,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   );
   unzip_file(output_dir.join("download.zip"), "download").context("Failed to unzip file")?;
 
-  info!(path = "RuniMorph.exe", "Running iMorph");
+  // patch::patch_specific_sleep_call("download/RuniMorph.exe")?;
+  info!(
+    path = output_dir.join("RuniMorph.exe").to_str(),
+    "Running iMorph"
+  );
   run_command(output_dir.join("RuniMorph.exe"), &[])
     .await
     .context("Failed to run RuniMorph.exe")?;
@@ -235,8 +261,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .write_all(entry.wow_version.as_bytes())
     .await
     .context("Failed to write version data")?;
-
-  sleep(Duration::from_secs(2)).await;
 
   Ok(())
 }
