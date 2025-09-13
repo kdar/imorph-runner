@@ -4,15 +4,18 @@ iMorph-runner is a utility for managing and launching iMorph. It checks for upda
 
 ## Features
 
-- Automatically checks for iMorph updates
-- Downloads the latest iMorph release if available
-- Launches iMorph after update check/download
-- Configurable via TOML vile
-- Supports multiple flavors and regions (e.g., Retail, Classic)
+- Automatically checks for iMorph updates.
+- Downloads the latest iMorph release if available.
+- Launches iMorph after update check/download.
+- Configurable via aTOML file.
+- Supports multiple products (Retail, Classic, and Classic Era).
+- Support multiple regions (Global and China).
 
 ## Prerequisites
 
-You must download and install [MEGAcmd](https://mega.io/cmd). Either ensure mega-get.bat is in your PATH, or configure mega_get to be the full path in config.toml.
+1. You must download and install [MEGAcmd](https://mega.io/cmd). Either ensure mega-get.bat is in your PATH, or configure mega_get to be the full path in config.toml.
+2. Login to mega using `mega-login --% "<username>" "<password>"`.
+3. Add the iMorph folder using `mega-import --% "https://mega.nz/folder/XQdwFJTR#X8VNWdap7eKtIvmPbpW6sA".`
 
 ## Installation
 
@@ -27,12 +30,11 @@ Run the program by double clicking it or running imorph-runner.exe in the termin
 Configure behavior by editing `config.toml`:
 
 ```toml
-region = "Global"                       # "Global", "China". Defaults to "Global".
-flavor = "Retail"                       # "Retail", "Classic", "Classic Era". Defaults to "Retail".
-name = "iMorph Net"                     # "iMorph", "iMorph Net", "iMorph Menu". Defaults to "iMorph Net".
+region = "global"                       # "global", "china". Defaults to "global".
+product = "wow"                         # "wow", "wow_classic", "wow_classic_era". Defaults to "wow".
+feature = "net"                         # "none", "net", "menu". Defaults to "net".
 output_directory = "download"           # Defaults to "download".
-mega_get = "mega-get.bat"               # Path to the mega-get.bat from MEGAcmd. Defaults to "mega-get.bat".
-api = "https://www.imorph.dev/api/apps" # URI to API. Defaults to "https://www.imorph.dev/api/apps".
+mega_path = ""                          # Path where MEGAcmd is installed. Default is to assume the commands are in $PATH.
 ```
 
 ## Building

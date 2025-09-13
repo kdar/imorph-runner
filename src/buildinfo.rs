@@ -1,49 +1,57 @@
-use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
-use tokio::{
-  fs::File,
-  io::{self, AsyncBufReadExt, BufReader},
-};
+use anyhow::{Context, Result};
+use csv::ReaderBuilder;
+use serde::Deserialize;
+use tokio::{fs::File, io::AsyncReadExt};
+use windows_registry::LOCAL_MACHINE;
 
-async fn parse_build_info(file_path: &str) -> io::Result<Option<String>> {
-  let file = File::open(file_path).await?;
-  let reader = BufReader::new(file);
-  let mut lines = reader.lines();
-
-  // Read header line
-  let header_line = match lines.next_line().await? {
-    Some(line) => line,
-    None => return Ok(None),
-  };
-
-  let headers: Vec<&str> = header_line.split('|').collect();
-
-  // Process each line
-  while let Some(line) = lines.next_line().await? {
-    let fields: Vec<&str> = line.split('|').collect();
-
-    if fields.len() != headers.len() {
-      continue;
-    }
-
-    let entry: HashMap<_, _> = headers.iter().zip(fields.iter()).collect();
-
-    if let Some(&"wow") = entry.get(&"ProductCode") {
-      if let Some(&version) = entry.get(&"Version") {
-        return Ok(Some(version.to_string()));
-      }
-    }
-  }
-
-  Ok(None)
+#[derive(Debug, Deserialize)]
+pub struct BuildInfoEntry {
+  #[serde(rename = "Version!STRING:0")]
+  pub version: String,
+  #[serde(rename = "Product!STRING:0")]
+  pub product: crate::Product,
 }
 
-async fn build_info() {
-  let build_info_path = r"C:\Program Files (x86)\World of Warcraft\.build.info";
+pub fn find_wow_install_path() -> Result<PathBuf> {
+  let key = LOCAL_MACHINE
+    .open("SOFTWARE\\WOW6432Node\\Blizzard Entertainment\\World of Warcraft")
+    .context("Failed to open WoW registry key. WoW may not be installed.")?;
 
-  match parse_build_info(build_info_path).await {
-    Ok(Some(version)) => println!("Detected WoW Version: {}", version),
-    Ok(None) => println!("WoW version not found in .build.info"),
-    Err(e) => eprintln!("Error reading file: {}", e),
+  let value = key
+    .get_string("InstallPath")
+    .context("Failed to get 'InstallPath' value. The registry entry may be incomplete.")?;
+
+  let p = PathBuf::from(value);
+  if !p.exists() {
+    return Err(anyhow::anyhow!(
+      "WoW installation path does not exist: {:?}",
+      p
+    ));
   }
+
+  Ok(p.parent().unwrap().to_owned())
+}
+
+pub async fn get_build_infos<P: AsRef<Path>>(path: P) -> Result<Vec<BuildInfoEntry>> {
+  // Open the file asynchronously.
+  let mut file = File::open(&path).await?;
+
+  // Read the entire file content into a vector of bytes.
+  let mut contents = Vec::new();
+  file.read_to_end(&mut contents).await?;
+
+  // Create a new CSV reader builder, reading from the in-memory buffer.
+  let mut rdr = ReaderBuilder::new()
+    .delimiter(b'|')
+    .has_headers(true)
+    .from_reader(contents.as_slice());
+
+  // Iterate over the deserialized records and collect them into a Vec.
+  let records = rdr
+    .deserialize()
+    .collect::<Result<Vec<BuildInfoEntry>, _>>()?;
+
+  Ok(records)
 }

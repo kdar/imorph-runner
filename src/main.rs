@@ -1,35 +1,118 @@
-use std::{collections::HashMap, fs::File, io, path::Path, process::Stdio};
+use std::{
+  fmt,
+  fs::File as StdFile,
+  io,
+  path::{Path, PathBuf},
+  process::Stdio,
+  str::FromStr,
+};
 
-use anyhow::{Context, Result};
-use reqwest;
-use serde::Deserialize;
+use anyhow::{Context, Result, anyhow};
+use serde::{Deserialize, Serialize};
 use time::{UtcOffset, macros::format_description};
 use tokio::{
-  fs,
+  fs::{self, File},
   io::{AsyncBufReadExt as _, AsyncReadExt, AsyncWriteExt, BufReader},
   process::Command,
 };
+use tokio_util::compat::TokioAsyncWriteCompatExt;
 use tracing::info;
 use tracing_subscriber::fmt::time::OffsetTime;
 use zip::{read::ZipArchive, result::ZipResult};
 
+mod buildinfo;
 mod config;
-mod patch;
+mod mega_helper;
 mod pty;
 
-#[derive(Debug, Deserialize)]
-struct ImorphEntry {
-  name: String,
+#[derive(PartialEq, Eq, Debug, Deserialize, Serialize)]
+enum Region {
+  #[serde(rename = "global")]
+  Global,
+  #[serde(rename = "china")]
+  China,
+}
+
+impl FromStr for Region {
+  type Err = anyhow::Error;
+
+  fn from_str(s: &str) -> Result<Self, Self::Err> {
+    match s.to_lowercase().as_str() {
+      "" => Ok(Region::Global),
+      "china" => Ok(Region::China),
+      _ => Err(anyhow!("could not parse region \"{}\"", s)),
+    }
+  }
+}
+
+#[derive(PartialEq, Eq, Debug, Deserialize, Serialize)]
+enum Product {
+  #[serde(rename = "wow")]
+  WoW,
+  #[serde(rename = "wow_classic")]
+  WoWClassic,
+  #[serde(rename = "wow_classic_era")]
+  WoWClassicEra,
+}
+
+impl fmt::Display for Product {
+  // The fmt method is required by the Display trait.
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    // Use a match statement to handle each enum variant.
+    match self {
+      Product::WoW => write!(f, "wow"),
+      Product::WoWClassic => write!(f, "wow_classic"),
+      Product::WoWClassicEra => write!(f, "wow_classic_era"),
+    }
+  }
+}
+
+#[derive(PartialEq, Eq, Debug, Deserialize, Serialize)]
+enum Feature {
+  #[serde(rename = "")]
+  None,
+  #[serde(rename = "net")]
+  Net,
+  #[serde(rename = "menu")]
+  Menu,
+}
+
+impl FromStr for Feature {
+  type Err = anyhow::Error;
+
+  fn from_str(s: &str) -> Result<Self, Self::Err> {
+    match s.to_lowercase().as_str() {
+      "" => Ok(Feature::None),
+      "net" => Ok(Feature::Net),
+      "menu" => Ok(Feature::Menu),
+      _ => Err(anyhow!("could not parse feature \"{}\"", s)),
+    }
+  }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ImorphEntry {
+  feature: Feature,
   wow_version: String,
-  // imorph_version: String,
+  imorph_version: String,
+  region: Region,
+  product: Product,
   url: String,
 }
 
-type RegionData = HashMap<String, Vec<ImorphEntry>>; // e.g., "Classic" -> Vec<ImorphEntry>
-type RootData = HashMap<String, RegionData>; // e.g., "China" -> RegionData
+// pub type RegionData = HashMap<String, Vec<ImorphEntry>>; // e.g., "Classic" -> Vec<ImorphEntry>
+// pub type RootData = HashMap<String, RegionData>; // e.g., "China" -> RegionData
+
+// static PRODUCT_MAP: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| {
+//   let mut map = HashMap::new();
+//   map.insert("retail", "wow");
+//   map.insert("classic", "wow_classic");
+//   map.insert("classic era", "wow_classic_era");
+//   map
+// });
 
 fn unzip_file(zip_path: impl AsRef<Path>, extract_to: &str) -> ZipResult<()> {
-  let file = File::open(zip_path)?;
+  let file = StdFile::open(zip_path)?;
   let mut archive = ZipArchive::new(file)?;
 
   for i in 0..archive.len() {
@@ -50,7 +133,7 @@ fn unzip_file(zip_path: impl AsRef<Path>, extract_to: &str) -> ZipResult<()> {
       if let Some(parent) = outpath.parent() {
         std::fs::create_dir_all(parent)?;
       }
-      let mut outfile = File::create(&outpath)?;
+      let mut outfile = StdFile::create(&outpath)?;
       io::copy(&mut file, &mut outfile)?;
       info!(name = name, "Extracted");
     }
@@ -150,14 +233,13 @@ pub fn enable_ansi_support() -> Result<()> {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<()> {
   #[cfg(windows)]
   enable_ansi_support()?;
 
   init_tracing();
 
   let cfg_file = "config.toml";
-
   info!(path = cfg_file, "Loading config");
   let cfg = config::load(cfg_file)?;
   let output_dir = Path::new(&cfg.output_directory);
@@ -167,41 +249,46 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await
     .context("Failed to create output directory")?;
 
-  info!("Fetching API");
-  let response = reqwest::get(&cfg.api).await.context("Failed to call API")?;
-  info!("Parsing JSON");
-  let data: RootData = response.json().await.context("Failed to parse JSON")?;
+  info!("Finding WoW install path");
+  let p = buildinfo::find_wow_install_path()?;
+  let buildinfo_path = p.join(".build.info");
+  info!(
+    path = format!("{}", buildinfo_path.as_os_str().to_str().unwrap()),
+    "Reading WoW build info"
+  );
+  let buildinfos = buildinfo::get_build_infos(&buildinfo_path).await?;
+  if buildinfos.len() == 0 {
+    return Err(anyhow!(
+      "No build info found in {:?}. Do you have WoW installed?",
+      buildinfo_path
+    ));
+  }
 
-  let Some(flavor_entries) = data.get(&cfg.region) else {
-    return Err(format!("could not find region {}", cfg.region).into());
-  };
-
-  let Some(name_entries) = flavor_entries.get(&cfg.flavor) else {
-    return Err(format!("could not find flavor {}", cfg.flavor).into());
-  };
-
-  let Some(entry) = name_entries.iter().find(|v| v.name == cfg.name) else {
-    return Err(format!("could not find iMorph name of {}", cfg.name).into());
+  let Some(buildinfo) = buildinfos
+    .iter()
+    .filter(|&v| v.product == cfg.product)
+    .next()
+  else {
+    return Err(anyhow!("Could not find product: {}", cfg.product));
   };
 
   let version_path = output_dir.join("latest.txt");
-
   info!(path = version_path.to_str(), "Opening version file");
-  let installed_version = match fs::File::open(&version_path).await {
+  let downloaded_imorph_wow_version = match fs::File::open(&version_path).await {
     Ok(mut file) => {
       let mut contents = String::new();
       file.read_to_string(&mut contents).await?;
-      contents
+      contents.trim().to_string()
     },
     Err(e) if e.kind() == io::ErrorKind::NotFound => String::new(),
-    Err(e) => return Err(Box::new(e) as Box<dyn std::error::Error>),
+    Err(e) => return Err(anyhow!(e)),
   };
 
-  if installed_version.trim() == &entry.wow_version {
+  if downloaded_imorph_wow_version == buildinfo.version {
     // patch::patch_specific_sleep_call("download/RuniMorph.exe")?;
     info!(
-      version = installed_version.trim(),
-      "Latest iMorph already downloaded"
+      version = downloaded_imorph_wow_version.trim(),
+      "Already have the iMorph that targets this WoW version"
     );
     let cmd_path = output_dir.join("RuniMorph.exe");
     info!(path = cmd_path.to_str(), "Running iMorph");
@@ -209,22 +296,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     return Ok(());
   }
 
+  info!("Fetching latest iMorph info");
+  let entries = mega_helper::get_mega_download_links(&cfg.mega_folder, &buildinfo.version).await?;
+
+  let Some(entry) = entries
+    .iter()
+    .find(|&v| v.product == cfg.product && v.feature == cfg.feature && v.region == cfg.region)
+  else {
+    info!(
+      wow_version = buildinfo.version,
+      "iMorph has not been released for the latest WoW version."
+    );
+    return Ok(());
+  };
+
   info!(
     path = output_dir.join("download.zip").to_str(),
     "Removing old downloaded zip"
   );
   std::fs::remove_file(output_dir.join("download.zip")).ok();
 
+  let mega_get = mega_path.join("mega-get.bat");
   info!(
     cmd = format!(
-      "{} {} {}",
-      &cfg.mega_get,
+      "{:?} {} {}",
+      &mega_get,
       &entry.url,
       output_dir.join("download.zip").to_str().unwrap(),
     ),
     "Running mega-get"
   );
-  let mut cmd: Command = Command::new(&cfg.mega_get);
+  let mut cmd: Command = Command::new(mega_get);
   cmd
     .arg(&entry.url)
     .arg(output_dir.join("download.zip"))
