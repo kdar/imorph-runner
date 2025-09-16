@@ -1,21 +1,13 @@
-use std::{
-  fmt,
-  fs::File as StdFile,
-  io,
-  path::{Path, PathBuf},
-  process::Stdio,
-  str::FromStr,
-};
+use std::{fmt, fs::File as StdFile, io, path::Path, process::Stdio, str::FromStr};
 
 use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 use time::{UtcOffset, macros::format_description};
 use tokio::{
-  fs::{self, File},
+  fs::{self},
   io::{AsyncBufReadExt as _, AsyncReadExt, AsyncWriteExt, BufReader},
   process::Command,
 };
-use tokio_util::compat::TokioAsyncWriteCompatExt;
 use tracing::info;
 use tracing_subscriber::fmt::time::OffsetTime;
 use zip::{read::ZipArchive, result::ZipResult};
@@ -25,7 +17,7 @@ mod config;
 mod mega_helper;
 mod pty;
 
-#[derive(PartialEq, Eq, Debug, Deserialize, Serialize)]
+#[derive(PartialEq, Eq, Copy, Clone, Debug, Deserialize, Serialize)]
 enum Region {
   #[serde(rename = "global")]
   Global,
@@ -45,7 +37,7 @@ impl FromStr for Region {
   }
 }
 
-#[derive(PartialEq, Eq, Debug, Deserialize, Serialize)]
+#[derive(PartialEq, Eq, Copy, Clone, Debug, Deserialize, Serialize)]
 enum Product {
   #[serde(rename = "wow")]
   WoW,
@@ -67,7 +59,7 @@ impl fmt::Display for Product {
   }
 }
 
-#[derive(PartialEq, Eq, Debug, Deserialize, Serialize)]
+#[derive(PartialEq, Eq, Copy, Clone, Debug, Deserialize, Serialize)]
 enum Feature {
   #[serde(rename = "")]
   None,
@@ -97,7 +89,7 @@ pub struct ImorphEntry {
   imorph_version: String,
   region: Region,
   product: Product,
-  url: String,
+  handle: String,
 }
 
 // pub type RegionData = HashMap<String, Vec<ImorphEntry>>; // e.g., "Classic" -> Vec<ImorphEntry>
@@ -284,72 +276,48 @@ async fn main() -> Result<()> {
     Err(e) => return Err(anyhow!(e)),
   };
 
+  let cmd_path = output_dir.join("RuniMorph.exe");
   if downloaded_imorph_wow_version == buildinfo.version {
     // patch::patch_specific_sleep_call("download/RuniMorph.exe")?;
     info!(
       version = downloaded_imorph_wow_version.trim(),
       "Already have the iMorph that targets this WoW version"
     );
-    let cmd_path = output_dir.join("RuniMorph.exe");
     info!(path = cmd_path.to_str(), "Running iMorph");
     pty::run_command(cmd_path, &[]).context("Failed to run command")?;
     return Ok(());
   }
 
-  info!("Fetching latest iMorph info");
-  let entries = mega_helper::get_mega_download_links(&cfg.mega_folder, &buildinfo.version).await?;
+  let download_path = output_dir.join("download.zip");
 
-  let Some(entry) = entries
-    .iter()
-    .find(|&v| v.product == cfg.product && v.feature == cfg.feature && v.region == cfg.region)
-  else {
+  info!(path = download_path.to_str(), "Removing old downloaded zip");
+  std::fs::remove_file(&download_path).ok();
+
+  info!("Fetching latest iMorph info");
+  let mh = mega_helper::MegaHelper::try_new(&cfg.mega_folder).await?;
+  let mut entries = mh
+    .fetch_entries(cfg.region, cfg.product, cfg.feature, &buildinfo.version)
+    .await?;
+
+  if entries.is_empty() {
     info!(
       wow_version = buildinfo.version,
       "iMorph has not been released for the latest WoW version."
     );
     return Ok(());
-  };
+  }
+
+  let entry = entries.remove(0);
 
   info!(
-    path = output_dir.join("download.zip").to_str(),
-    "Removing old downloaded zip"
+    imorph_version = entry.imorph_version,
+    wow_version = entry.wow_version,
+    "Downloading iMorph"
   );
-  std::fs::remove_file(output_dir.join("download.zip")).ok();
+  mh.download(&entry.handle, &download_path).await?;
 
-  let mega_get = mega_path.join("mega-get.bat");
-  info!(
-    cmd = format!(
-      "{:?} {} {}",
-      &mega_get,
-      &entry.url,
-      output_dir.join("download.zip").to_str().unwrap(),
-    ),
-    "Running mega-get"
-  );
-  let mut cmd: Command = Command::new(mega_get);
-  cmd
-    .arg(&entry.url)
-    .arg(output_dir.join("download.zip"))
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped());
-  let child = cmd.spawn().context("Failed to call mega-get")?;
-
-  child.wait_with_output().await?;
-
-  info!(
-    path = output_dir.join("download.zip").to_str(),
-    "Unzipping downloaded zip"
-  );
-  unzip_file(output_dir.join("download.zip"), "download").context("Failed to unzip file")?;
-
-  // patch::patch_specific_sleep_call("download/RuniMorph.exe")?;
-  info!(
-    path = output_dir.join("RuniMorph.exe").to_str(),
-    "Running iMorph"
-  );
-  run_command(output_dir.join("RuniMorph.exe"), &[])
-    .await
-    .context("Failed to run RuniMorph.exe")?;
+  info!(path = download_path.to_str(), "Unzipping downloaded zip");
+  unzip_file(download_path, "download").context("Failed to unzip file")?;
 
   info!(
     path = version_path.to_str(),
@@ -363,6 +331,13 @@ async fn main() -> Result<()> {
     .write_all(entry.wow_version.as_bytes())
     .await
     .context("Failed to write version data")?;
+
+  // patch::patch_specific_sleep_call("download/RuniMorph.exe")?;
+  info!(
+    path = output_dir.join("RuniMorph.exe").to_str(),
+    "Running iMorph"
+  );
+  pty::run_command(cmd_path, &[]).context("Failed to run command")?;
 
   Ok(())
 }

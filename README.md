@@ -30,11 +30,11 @@ Run the program by double clicking it or running imorph-runner.exe in the termin
 Configure behavior by editing `config.toml`:
 
 ```toml
-region = "global"                       # "global", "china". Defaults to "global".
-product = "wow"                         # "wow", "wow_classic", "wow_classic_era". Defaults to "wow".
-feature = "net"                         # "none", "net", "menu". Defaults to "net".
-output_directory = "download"           # Defaults to "download".
-mega_path = ""                          # Path where MEGAcmd is installed. Default is to assume the commands are in $PATH.
+region = "global"                                                      # "global", "china". Defaults to "global".
+product = "wow"                                                        # "wow", "wow_classic", "wow_classic_era". Defaults to "wow".
+feature = "net"                                                        # "none", "net", "menu". Defaults to "net".
+output_directory = "download"                                          # Defaults to "download".
+mega_folder = "https://mega.nz/folder/XQdwFJTR#X8VNWdap7eKtIvmPbpW6sA" # The link to the public iMorph folder.
 ```
 
 ## Building
