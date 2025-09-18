@@ -1,12 +1,17 @@
-use std::{ffi::OsStr, io::Read, process::Command, sync::mpsc, thread, time::Duration};
+use std::{ffi::OsStr, io::Read, path::Path, process::Command, sync::mpsc, thread, time::Duration};
 
 use conpty::Process;
 use regex::Regex;
 use tracing::info;
 
-pub fn run_command(command: impl AsRef<OsStr>, args: &[&str]) -> anyhow::Result<u32> {
+pub fn run_command<P: AsRef<Path>>(
+  cwd: P,
+  command: impl AsRef<OsStr>,
+  args: &[&str],
+) -> anyhow::Result<u32> {
   let mut cmd = Command::new(command.as_ref());
   cmd.args(args);
+  cmd.current_dir(cwd);
 
   let mut proc = Process::spawn(cmd)?;
   let mut reader = proc.output()?;

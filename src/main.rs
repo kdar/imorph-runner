@@ -284,7 +284,7 @@ async fn main() -> Result<()> {
       "Already have the iMorph that targets this WoW version"
     );
     info!(path = cmd_path.to_str(), "Running iMorph");
-    pty::run_command(cmd_path, &[]).context("Failed to run command")?;
+    pty::run_command(output_dir, cmd_path, &[]).context("Failed to run command")?;
     return Ok(());
   }
 
@@ -337,7 +337,7 @@ async fn main() -> Result<()> {
     path = output_dir.join("RuniMorph.exe").to_str(),
     "Running iMorph"
   );
-  pty::run_command(cmd_path, &[]).context("Failed to run command")?;
+  pty::run_command(output_dir, cmd_path, &[]).context("Failed to run command")?;
 
   Ok(())
 }
