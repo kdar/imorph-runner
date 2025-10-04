@@ -1,6 +1,9 @@
-use std::path::{Path, PathBuf};
+use std::{
+  env, fs,
+  path::{Path, PathBuf},
+};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use csv::ReaderBuilder;
 use serde::Deserialize;
 use tokio::{fs::File, io::AsyncReadExt};
@@ -14,24 +17,52 @@ pub struct BuildInfoEntry {
   pub product: crate::Product,
 }
 
-pub fn find_wow_install_path() -> Result<PathBuf> {
-  let key = LOCAL_MACHINE
-    .open("SOFTWARE\\WOW6432Node\\Blizzard Entertainment\\World of Warcraft")
-    .context("Failed to open WoW registry key. WoW may not be installed.")?;
+// pub fn find_wow_install_path() -> Result<PathBuf> {
+//   let key = LOCAL_MACHINE
+//     .open("SOFTWARE\\WOW6432Node\\Blizzard Entertainment\\World of Warcraft")
+//     .context("Failed to open WoW registry key. WoW may not be installed.")?;
 
-  let value = key
-    .get_string("InstallPath")
-    .context("Failed to get 'InstallPath' value. The registry entry may be incomplete.")?;
+//   let value = key
+//     .get_string("InstallPath")
+//     .context("Failed to get 'InstallPath' value. The registry entry may be incomplete.")?;
 
-  let p = PathBuf::from(value);
-  if !p.exists() {
-    return Err(anyhow::anyhow!(
-      "WoW installation path does not exist: {:?}",
-      p
-    ));
+//   let p = PathBuf::from(value);
+//   if !p.exists() {
+//     return Err(anyhow::anyhow!(
+//       "WoW installation path does not exist: {:?}",
+//       p
+//     ));
+//   }
+
+//   Ok(p.parent().unwrap().to_owned())
+// }
+
+pub fn find_wow_install_path(product: crate::Product) -> Result<PathBuf> {
+  let pd = match env::var("PROGRAMDATA") {
+    Ok(path) => path,
+    Err(e) => {
+      return Err(anyhow!(
+        "Could not read PROGRAMDATA environment variable: {}",
+        e
+      ));
+    },
+  };
+
+  let p = PathBuf::from(pd)
+    .join("Battle.net")
+    .join("Agent")
+    .join("product.db");
+  let data = fs::read(&p)?;
+  let pdb = crate::productdb::deserialize(&data)?;
+  for install in pdb.product_installs {
+    if install.product_code == product.to_string() {
+      if let Some(settings) = install.settings {
+        return Ok(PathBuf::from(settings.install_path));
+      }
+    }
   }
 
-  Ok(p.parent().unwrap().to_owned())
+  Err(anyhow!("could not find {} install path", product))
 }
 
 pub async fn get_build_infos<P: AsRef<Path>>(path: P) -> Result<Vec<BuildInfoEntry>> {

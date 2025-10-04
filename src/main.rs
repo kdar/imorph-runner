@@ -15,6 +15,7 @@ use zip::{read::ZipArchive, result::ZipResult};
 mod buildinfo;
 mod config;
 mod mega_helper;
+mod productdb;
 mod pty;
 
 #[derive(PartialEq, Eq, Copy, Clone, Debug, Deserialize, Serialize)]
@@ -242,7 +243,7 @@ async fn main() -> Result<()> {
     .context("Failed to create output directory")?;
 
   info!("Finding WoW install path");
-  let p = buildinfo::find_wow_install_path()?;
+  let p = buildinfo::find_wow_install_path(cfg.product)?;
   let buildinfo_path = p.join(".build.info");
   info!(
     path = format!("{}", buildinfo_path.as_os_str().to_str().unwrap()),
