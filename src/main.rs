@@ -51,9 +51,7 @@ enum Product {
 }
 
 impl fmt::Display for Product {
-  // The fmt method is required by the Display trait.
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    // Use a match statement to handle each enum variant.
     match self {
       Product::WoW => write!(f, "wow"),
       Product::WoWClassic => write!(f, "wow_classic"),
@@ -107,6 +105,7 @@ pub struct ImorphEntry {
 //   map
 // });
 
+/// Extracts a zip file to the specified directory
 fn unzip_file(zip_path: impl AsRef<Path>, extract_to: &str) -> ZipResult<()> {
   let file = StdFile::open(zip_path)?;
   let mut archive = ZipArchive::new(file)?;
@@ -114,12 +113,11 @@ fn unzip_file(zip_path: impl AsRef<Path>, extract_to: &str) -> ZipResult<()> {
   for i in 0..archive.len() {
     let mut file = archive.by_index(i)?;
     let name = file.name().to_owned();
-
     let outpath = Path::new(extract_to).join(file.mangled_name());
 
-    // Check if imorph.conf already exists, and skip if so.
+    // Check if imorph.conf already exists, and skip if so
     if name == "imorph.conf" && outpath.exists() {
-      println!("⏭️ Skipping existing file: {}", name);
+      info!(name = name, "Skipping existing file");
       continue;
     }
 
@@ -175,104 +173,122 @@ pub fn enable_ansi_support() -> Result<()> {
   }
 }
 
-async fn run(cfg: &config::Config) -> Result<()> {
+/// Sets up the environment (ANSI support, tracing)
+fn setup_environment() -> Result<()> {
   #[cfg(windows)]
   enable_ansi_support()?;
-
   init_tracing();
+  Ok(())
+}
 
-  let output_dir = Path::new(&cfg.output_directory);
-
-  info!(path = &cfg.output_directory, "Creating output directory");
-  tokio::fs::create_dir_all(&cfg.output_directory)
+/// Ensures the output directory exists
+async fn ensure_output_directory(path: &str) -> Result<()> {
+  info!(path = path, "Creating output directory");
+  tokio::fs::create_dir_all(path)
     .await
     .context("Failed to create output directory")?;
+  Ok(())
+}
 
+/// Retrieves the WoW build info for the specified product
+async fn get_wow_build_info(product: Product) -> Result<buildinfo::BuildInfoEntry> {
   info!("Finding WoW install path");
-  let p = buildinfo::find_wow_install_path(cfg.product)?;
-  let buildinfo_path = p.join(".build.info");
+  let install_path = buildinfo::find_wow_install_path(product)?;
+  let buildinfo_path = install_path.join(".build.info");
+  
   info!(
     path = format!("{}", buildinfo_path.as_os_str().to_str().unwrap()),
     "Reading WoW build info"
   );
+  
   let buildinfos = buildinfo::get_build_infos(&buildinfo_path).await?;
-  if buildinfos.len() == 0 {
+  
+  if buildinfos.is_empty() {
     return Err(anyhow!(
       "No build info found in {:?}. Do you have WoW installed?",
       buildinfo_path
     ));
   }
 
-  let Some(buildinfo) = buildinfos
-    .iter()
-    .filter(|&v| v.product == cfg.product)
-    .next()
-  else {
-    return Err(anyhow!("Could not find product: {}", cfg.product));
-  };
+  buildinfos
+    .into_iter()
+    .find(|v| v.product == product)
+    .ok_or_else(|| anyhow!("Could not find product: {}", product))
+}
 
+/// Finds the latest iMorph entry matching the criteria
+async fn find_latest_imorph_entry(
+  mh: &mega_helper::MegaHelper,
+  region: Region,
+  product: Product,
+  feature: Feature,
+  wow_version: &str,
+) -> Result<ImorphEntry> {
   info!("Fetching latest iMorph info");
-  let mh = mega_helper::MegaHelper::try_new(&cfg.mega_folder).await?;
   let mut entries = mh
-    .fetch_entries(cfg.region, cfg.product, cfg.feature, &buildinfo.version)
+    .fetch_entries(region, product, feature, wow_version)
     .await?;
 
   if entries.is_empty() {
     return Err(anyhow!(
       "iMorph has not been released for the latest WoW version={}.",
-      buildinfo.version
+      wow_version
     ));
   }
 
-  // Find the entry with the greatest imorph_version according to semantic versioning.
+  // Find the entry with the greatest imorph_version according to semantic versioning
+  let parse_version = |v: &str| Version::parse(v).unwrap_or_else(|_| Version::new(0, 0, 0));
+  
   let max_index = entries
     .iter()
     .enumerate()
     .max_by(|(_, a), (_, b)| {
-      let v1 = Version::parse(&a.imorph_version).unwrap_or(Version::new(0, 0, 0));
-      let v2 = Version::parse(&b.imorph_version).unwrap_or(Version::new(0, 0, 0));
-      v1.cmp(&v2)
+      parse_version(&a.imorph_version).cmp(&parse_version(&b.imorph_version))
     })
     .map(|(idx, _)| idx)
     .unwrap_or(0);
 
-  let entry = entries.remove(max_index);
+  Ok(entries.remove(max_index))
+}
 
-  // println!("{:#?}", entry);
-  // return Ok(());
-
-  let version_path = output_dir.join("latest.txt");
+/// Reads the version file and returns (imorph_version, wow_version)
+async fn read_version_file(version_path: &Path) -> Result<(String, String)> {
   info!(path = version_path.to_str(), "Opening version file");
-  let (downloaded_imorph_version, downloaded_imorph_wow_version) =
-    match fs::File::open(&version_path).await {
-      Ok(mut file) => {
-        let mut contents = String::new();
-        file.read_to_string(&mut contents).await?;
-        let contents = contents.trim().to_string();
+  
+  match fs::File::open(version_path).await {
+    Ok(mut file) => {
+      let mut contents = String::new();
+      file.read_to_string(&mut contents).await?;
+      let contents = contents.trim().to_string();
+      Ok(
         contents
           .split_once("|")
           .map(|v| (v.0.to_string(), v.1.to_string()))
           .unwrap_or((String::new(), String::new()))
-      },
-      Err(e) if e.kind() == io::ErrorKind::NotFound => (String::new(), String::new()),
-      Err(e) => return Err(anyhow!(e)),
-    };
-
-  let cmd_path = output_dir.join("RuniMorph.exe");
-  if downloaded_imorph_version == entry.imorph_version
-    && downloaded_imorph_wow_version == buildinfo.version
-  {
-    // patch::patch_specific_sleep_call("download/RuniMorph.exe")?;
-    info!(
-      imorph_version = downloaded_imorph_version,
-      wow_version = downloaded_imorph_wow_version,
-      "Already have the latest iMorph that targets this WoW version"
-    );
-    info!(path = cmd_path.to_str(), "Running iMorph");
-    pty::run_command(output_dir, cmd_path, &[], "[imorph] ").context("Failed to run command")?;
-    return Ok(());
+      )
+    },
+    Err(e) if e.kind() == io::ErrorKind::NotFound => Ok((String::new(), String::new())),
+    Err(e) => Err(anyhow!(e)),
   }
+}
 
+/// Checks if we already have the latest version downloaded
+fn is_already_downloaded(
+  downloaded_imorph_version: &str,
+  downloaded_wow_version: &str,
+  entry: &ImorphEntry,
+  buildinfo: &buildinfo::BuildInfoEntry,
+) -> bool {
+  downloaded_imorph_version == entry.imorph_version
+    && downloaded_wow_version == buildinfo.version
+}
+
+/// Downloads and extracts the iMorph zip file
+async fn download_and_extract_imorph(
+  mh: &mega_helper::MegaHelper,
+  entry: &ImorphEntry,
+  output_dir: &Path,
+) -> Result<()> {
   let download_path = output_dir.join("download.zip");
 
   info!(path = download_path.to_str(), "Removing old downloaded zip");
@@ -286,31 +302,85 @@ async fn run(cfg: &config::Config) -> Result<()> {
   mh.download(&entry.handle, &download_path).await?;
 
   info!(path = download_path.to_str(), "Unzipping downloaded zip");
-  unzip_file(download_path, "download").context("Failed to unzip file")?;
+  unzip_file(&download_path, "download").context("Failed to unzip file")?;
 
+  Ok(())
+}
+
+/// Updates the version file with the current versions
+async fn update_version_file(version_path: &Path, entry: &ImorphEntry) -> Result<()> {
   info!(
     path = version_path.to_str(),
     version = entry.wow_version,
     "Updating version file"
   );
+  
   let mut file = fs::File::create(version_path)
     .await
     .context("Failed to create version file")?;
+  
   file
     .write_all(format!("{}|{}", entry.imorph_version, entry.wow_version).as_bytes())
     .await
     .context("Failed to write version data")?;
+  
+  Ok(())
+}
 
-  // patch::patch_specific_sleep_call("download/RuniMorph.exe")?;
-  info!(
-    path = output_dir.join("RuniMorph.exe").to_str(),
-    "Running iMorph"
-  );
-  pty::run_command(output_dir, cmd_path, &[], "[imorph] ").context("Failed to run command")?;
+/// Runs the iMorph executable
+fn run_imorph(output_dir: &Path, cmd_path: &Path) -> Result<()> {
+  info!(path = cmd_path.to_str(), "Running iMorph");
+  pty::run_command(output_dir, cmd_path, &[], "[imorph] ")
+    .context("Failed to run command")?;
+  Ok(())
+}
+
+async fn run(cfg: &config::Config) -> Result<()> {
+  setup_environment()?;
+  ensure_output_directory(&cfg.output_directory).await?;
+
+  let output_dir = Path::new(&cfg.output_directory);
+  let buildinfo = get_wow_build_info(cfg.product).await?;
+
+  let mh = mega_helper::MegaHelper::try_new(&cfg.mega_folder).await?;
+  let entry = find_latest_imorph_entry(
+    &mh,
+    cfg.region,
+    cfg.product,
+    cfg.feature,
+    &buildinfo.version,
+  )
+  .await?;
+
+  let version_path = output_dir.join("latest.txt");
+  let (downloaded_imorph_version, downloaded_wow_version) =
+    read_version_file(&version_path).await?;
+
+  let cmd_path = output_dir.join("RuniMorph.exe");
+  
+  if is_already_downloaded(
+    &downloaded_imorph_version,
+    &downloaded_wow_version,
+    &entry,
+    &buildinfo,
+  ) {
+    info!(
+      imorph_version = downloaded_imorph_version,
+      wow_version = downloaded_wow_version,
+      "Already have the latest iMorph that targets this WoW version"
+    );
+    run_imorph(output_dir, &cmd_path)?;
+    return Ok(());
+  }
+
+  download_and_extract_imorph(&mh, &entry, output_dir).await?;
+  update_version_file(&version_path, &entry).await?;
+  run_imorph(output_dir, &cmd_path)?;
 
   Ok(())
 }
 
+/// Runs all commands configured for a given trigger
 fn run_commands_for_trigger(cfg: &config::Config, trigger: &str) {
   let commands = cfg.commands_for_trigger(trigger);
 
@@ -330,9 +400,11 @@ fn run_commands_for_trigger(cfg: &config::Config, trigger: &str) {
     );
 
     if let Err(e) = pty::run_command(".", &cmd.path, &args, "[cmd] ") {
-      eprintln!(
-        "Failed to run command '{}' for trigger '{}': {}",
-        cmd.path, trigger, e
+      error!(
+        command = cmd.path,
+        trigger = trigger,
+        error = %e,
+        "Failed to run command"
       );
     }
   }
