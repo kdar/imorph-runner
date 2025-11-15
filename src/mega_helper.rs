@@ -33,6 +33,7 @@ impl MegaHelper {
       crate::Product::WoW => "retail",
       crate::Product::WoWClassic => "classic",
       crate::Product::WoWClassicEra => "cata",
+      crate::Product::WoWBeta => "beta",
     };
 
     let node = self
