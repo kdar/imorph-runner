@@ -1,6 +1,7 @@
 use std::{fmt, fs::File as StdFile, io, path::Path, str::FromStr};
 
 use anyhow::{Context, Result, anyhow};
+use semver::Version;
 use serde::{Deserialize, Serialize};
 use time::{UtcOffset, macros::format_description};
 use tokio::{
@@ -148,6 +149,7 @@ fn init_tracing() {
     .with_writer(std::io::stdout) // forces flush after every write
     .with_target(false)
     .with_timer(timer)
+    .with_span_events(tracing_subscriber::fmt::format::FmtSpan::NONE)
     .compact()
     .init();
 }
@@ -173,15 +175,12 @@ pub fn enable_ansi_support() -> Result<()> {
   }
 }
 
-async fn run() -> Result<()> {
+async fn run(cfg: &config::Config) -> Result<()> {
   #[cfg(windows)]
   enable_ansi_support()?;
 
   init_tracing();
 
-  let cfg_file = "config.toml";
-  info!(path = cfg_file, "Loading config");
-  let cfg = config::load(cfg_file)?;
   let output_dir = Path::new(&cfg.output_directory);
 
   info!(path = &cfg.output_directory, "Creating output directory");
@@ -212,35 +211,6 @@ async fn run() -> Result<()> {
     return Err(anyhow!("Could not find product: {}", cfg.product));
   };
 
-  let version_path = output_dir.join("latest.txt");
-  info!(path = version_path.to_str(), "Opening version file");
-  let downloaded_imorph_wow_version = match fs::File::open(&version_path).await {
-    Ok(mut file) => {
-      let mut contents = String::new();
-      file.read_to_string(&mut contents).await?;
-      contents.trim().to_string()
-    },
-    Err(e) if e.kind() == io::ErrorKind::NotFound => String::new(),
-    Err(e) => return Err(anyhow!(e)),
-  };
-
-  let cmd_path = output_dir.join("RuniMorph.exe");
-  if downloaded_imorph_wow_version == buildinfo.version {
-    // patch::patch_specific_sleep_call("download/RuniMorph.exe")?;
-    info!(
-      version = downloaded_imorph_wow_version.trim(),
-      "Already have the iMorph that targets this WoW version"
-    );
-    info!(path = cmd_path.to_str(), "Running iMorph");
-    pty::run_command(output_dir, cmd_path, &[]).context("Failed to run command")?;
-    return Ok(());
-  }
-
-  let download_path = output_dir.join("download.zip");
-
-  info!(path = download_path.to_str(), "Removing old downloaded zip");
-  std::fs::remove_file(&download_path).ok();
-
   info!("Fetching latest iMorph info");
   let mh = mega_helper::MegaHelper::try_new(&cfg.mega_folder).await?;
   let mut entries = mh
@@ -254,7 +224,59 @@ async fn run() -> Result<()> {
     ));
   }
 
-  let entry = entries.remove(0);
+  // Find the entry with the greatest imorph_version according to semantic versioning.
+  let max_index = entries
+    .iter()
+    .enumerate()
+    .max_by(|(_, a), (_, b)| {
+      let v1 = Version::parse(&a.imorph_version).unwrap_or(Version::new(0, 0, 0));
+      let v2 = Version::parse(&b.imorph_version).unwrap_or(Version::new(0, 0, 0));
+      v1.cmp(&v2)
+    })
+    .map(|(idx, _)| idx)
+    .unwrap_or(0);
+
+  let entry = entries.remove(max_index);
+
+  // println!("{:#?}", entry);
+  // return Ok(());
+
+  let version_path = output_dir.join("latest.txt");
+  info!(path = version_path.to_str(), "Opening version file");
+  let (downloaded_imorph_version, downloaded_imorph_wow_version) =
+    match fs::File::open(&version_path).await {
+      Ok(mut file) => {
+        let mut contents = String::new();
+        file.read_to_string(&mut contents).await?;
+        let contents = contents.trim().to_string();
+        contents
+          .split_once("|")
+          .map(|v| (v.0.to_string(), v.1.to_string()))
+          .unwrap_or((String::new(), String::new()))
+      },
+      Err(e) if e.kind() == io::ErrorKind::NotFound => (String::new(), String::new()),
+      Err(e) => return Err(anyhow!(e)),
+    };
+
+  let cmd_path = output_dir.join("RuniMorph.exe");
+  if downloaded_imorph_version == entry.imorph_version
+    && downloaded_imorph_wow_version == buildinfo.version
+  {
+    // patch::patch_specific_sleep_call("download/RuniMorph.exe")?;
+    info!(
+      imorph_version = downloaded_imorph_version,
+      wow_version = downloaded_imorph_wow_version,
+      "Already have the latest iMorph that targets this WoW version"
+    );
+    info!(path = cmd_path.to_str(), "Running iMorph");
+    pty::run_command(output_dir, cmd_path, &[], "[imorph] ").context("Failed to run command")?;
+    return Ok(());
+  }
+
+  let download_path = output_dir.join("download.zip");
+
+  info!(path = download_path.to_str(), "Removing old downloaded zip");
+  std::fs::remove_file(&download_path).ok();
 
   info!(
     imorph_version = entry.imorph_version,
@@ -275,7 +297,7 @@ async fn run() -> Result<()> {
     .await
     .context("Failed to create version file")?;
   file
-    .write_all(entry.wow_version.as_bytes())
+    .write_all(format!("{}|{}", entry.imorph_version, entry.wow_version).as_bytes())
     .await
     .context("Failed to write version data")?;
 
@@ -284,17 +306,51 @@ async fn run() -> Result<()> {
     path = output_dir.join("RuniMorph.exe").to_str(),
     "Running iMorph"
   );
-  pty::run_command(output_dir, cmd_path, &[]).context("Failed to run command")?;
+  pty::run_command(output_dir, cmd_path, &[], "[imorph] ").context("Failed to run command")?;
 
   Ok(())
 }
 
+fn run_commands_for_trigger(cfg: &config::Config, trigger: &str) {
+  let commands = cfg.commands_for_trigger(trigger);
+
+  if commands.is_empty() {
+    return;
+  }
+
+  for cmd in commands {
+    let args: Vec<&str> = cmd.args.iter().map(|s| s.as_str()).collect();
+    let args_str = format!("{:?}", args);
+
+    info!(
+      trigger = trigger,
+      command = cmd.path,
+      args = %args_str,
+      "Running command",
+    );
+
+    if let Err(e) = pty::run_command(".", &cmd.path, &args, "[cmd] ") {
+      eprintln!(
+        "Failed to run command '{}' for trigger '{}': {}",
+        cmd.path, trigger, e
+      );
+    }
+  }
+}
+
 #[tokio::main]
 async fn main() {
-  match run().await {
-    Ok(_) => (),
+  // Load config first so we have it available for error handling
+  let cfg_file = "config.toml";
+  let cfg = config::load_or_default(cfg_file);
+
+  match run(&cfg).await {
+    Ok(_) => {
+      run_commands_for_trigger(&cfg, "after_success");
+    },
     Err(e) => {
       error!("{}", e);
+      run_commands_for_trigger(&cfg, "after_error");
     },
   };
 }

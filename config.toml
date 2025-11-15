@@ -3,3 +3,8 @@ product = "wow"                                                        # "wow", 
 feature = "net"                                                        # "none", "net", "menu". Defaults to "net".
 output_directory = "download"                                          # Defaults to "download".
 mega_folder = "https://mega.nz/folder/XQdwFJTR#X8VNWdap7eKtIvmPbpW6sA" # The link to the public iMorph folder.
+
+[[cmd]]
+trigger = "after_error"
+path = "powershell"
+args = ["-command", "Start-Sleep", "-Seconds", "5"]

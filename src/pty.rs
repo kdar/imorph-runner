@@ -8,6 +8,7 @@ pub fn run_command<P: AsRef<Path>>(
   cwd: P,
   command: impl AsRef<OsStr>,
   args: &[&str],
+  log_prefix: &str,
 ) -> anyhow::Result<u32> {
   let mut cmd = Command::new(command.as_ref());
   cmd.args(args);
@@ -21,6 +22,7 @@ pub fn run_command<P: AsRef<Path>>(
   let (tx, rx) = mpsc::channel();
 
   // Spawn thread to read from PTY output
+  // We need to clone the span context to use it in the thread
   thread::spawn(move || {
     let mut buf = [0u8; 1024];
     loop {
@@ -51,7 +53,11 @@ pub fn run_command<P: AsRef<Path>>(
           if byte == b'\n' {
             let line = String::from_utf8_lossy(&line_buffer);
             let clean = ansi_re.replace_all(&line, "");
-            info!("[imorph] {}", clean.trim_end_matches(&['\r', '\n'][..]));
+            info!(
+              "{}{}",
+              log_prefix,
+              clean.trim_end_matches(&['\r', '\n'][..])
+            );
             line_buffer.clear();
           }
         }
@@ -71,7 +77,7 @@ pub fn run_command<P: AsRef<Path>>(
   if !line_buffer.is_empty() {
     let line = String::from_utf8_lossy(&line_buffer);
     let clean = ansi_re.replace_all(&line, "");
-    info!("[imorph] {}", clean.trim_end());
+    info!("{}{}", log_prefix, clean.trim_end());
   }
 
   let exit_code = proc.wait(None)?;
