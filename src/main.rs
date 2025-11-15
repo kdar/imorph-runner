@@ -1,14 +1,13 @@
-use std::{fmt, fs::File as StdFile, io, path::Path, process::Stdio, str::FromStr};
+use std::{fmt, fs::File as StdFile, io, path::Path, str::FromStr};
 
 use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 use time::{UtcOffset, macros::format_description};
 use tokio::{
-  fs::{self},
-  io::{AsyncBufReadExt as _, AsyncReadExt, AsyncWriteExt, BufReader},
-  process::Command,
+  fs,
+  io::{AsyncReadExt, AsyncWriteExt},
 };
-use tracing::info;
+use tracing::{error, info};
 use tracing_subscriber::fmt::time::OffsetTime;
 use zip::{read::ZipArchive, result::ZipResult};
 
@@ -46,6 +45,8 @@ enum Product {
   WoWClassic,
   #[serde(rename = "wow_classic_era")]
   WoWClassicEra,
+  #[serde(rename = "wow_beta")]
+  WoWBeta,
 }
 
 impl fmt::Display for Product {
@@ -56,6 +57,7 @@ impl fmt::Display for Product {
       Product::WoW => write!(f, "wow"),
       Product::WoWClassic => write!(f, "wow_classic"),
       Product::WoWClassicEra => write!(f, "wow_classic_era"),
+      Product::WoWBeta => write!(f, "wow_beta"),
     }
   }
 }
@@ -135,60 +137,6 @@ fn unzip_file(zip_path: impl AsRef<Path>, extract_to: &str) -> ZipResult<()> {
   Ok(())
 }
 
-pub async fn run_command(
-  command: impl AsRef<std::ffi::OsStr>,
-  args: &[&str],
-) -> Result<std::process::ExitStatus> {
-  let mut child = Command::new(command)
-    .args(args)
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped())
-    // .stdout(Stdio::inherit())
-    // .stderr(Stdio::inherit())
-    .spawn()?;
-
-  let stdout = child.stdout.take().expect("Failed to capture stdout");
-  let stderr = child.stderr.take().expect("Failed to capture stderr");
-
-  let mut stdout_reader = BufReader::new(stdout).lines();
-  let mut stderr_reader = BufReader::new(stderr).lines();
-
-  // let stdout_task = tokio::spawn(async move {
-  //   let mut buf = [0; 1024];
-  //   loop {
-  //     match stdout.read(&mut buf).await {
-  //       Ok(0) => break, // EOF
-  //       Ok(n) => {
-  //         let chunk = String::from_utf8_lossy(&buf[..n]);
-  //         print!("[stdout] {}", chunk);
-  //       },
-  //       Err(e) => {
-  //         eprintln!("Error reading stdout: {}", e);
-  //         break;
-  //       },
-  //     }
-  //   }
-  // });
-
-  let stdout_task = tokio::spawn(async move {
-    while let Ok(Some(line)) = stdout_reader.next_line().await {
-      info!("[imorph] {}", line);
-    }
-  });
-
-  let stderr_task = tokio::spawn(async move {
-    while let Ok(Some(line)) = stderr_reader.next_line().await {
-      info!("[imorph] {}", line);
-    }
-  });
-
-  stdout_task.await?;
-  stderr_task.await?;
-  let status = child.wait().await?;
-
-  Ok(status)
-}
-
 fn init_tracing() {
   let timer_format = format_description!("[year]-[month]-[day] [hour]:[minute]");
   let local_offset = UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC);
@@ -225,8 +173,7 @@ pub fn enable_ansi_support() -> Result<()> {
   }
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+async fn run() -> Result<()> {
   #[cfg(windows)]
   enable_ansi_support()?;
 
@@ -301,11 +248,10 @@ async fn main() -> Result<()> {
     .await?;
 
   if entries.is_empty() {
-    info!(
-      wow_version = buildinfo.version,
-      "iMorph has not been released for the latest WoW version."
-    );
-    return Ok(());
+    return Err(anyhow!(
+      "iMorph has not been released for the latest WoW version={}.",
+      buildinfo.version
+    ));
   }
 
   let entry = entries.remove(0);
@@ -341,4 +287,14 @@ async fn main() -> Result<()> {
   pty::run_command(output_dir, cmd_path, &[]).context("Failed to run command")?;
 
   Ok(())
+}
+
+#[tokio::main]
+async fn main() {
+  match run().await {
+    Ok(_) => (),
+    Err(e) => {
+      error!("{}", e);
+    },
+  };
 }

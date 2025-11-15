@@ -3,11 +3,10 @@ use std::{
   path::{Path, PathBuf},
 };
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Result, anyhow};
 use csv::ReaderBuilder;
 use serde::Deserialize;
 use tokio::{fs::File, io::AsyncReadExt};
-use windows_registry::LOCAL_MACHINE;
 
 #[derive(Debug, Deserialize)]
 pub struct BuildInfoEntry {
