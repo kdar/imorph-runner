@@ -144,10 +144,10 @@ fn init_tracing() {
 
   tracing_subscriber::fmt()
     // .with_max_level(tracing::Level::DEBUG)
-    .with_writer(std::io::stdout) // forces flush after every write
     .with_target(false)
     .with_timer(timer)
     .with_span_events(tracing_subscriber::fmt::format::FmtSpan::NONE)
+    // .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
     .compact()
     .init();
 }
@@ -195,14 +195,14 @@ async fn get_wow_build_info(product: Product) -> Result<buildinfo::BuildInfoEntr
   info!("Finding WoW install path");
   let install_path = buildinfo::find_wow_install_path(product)?;
   let buildinfo_path = install_path.join(".build.info");
-  
+
   info!(
     path = format!("{}", buildinfo_path.as_os_str().to_str().unwrap()),
     "Reading WoW build info"
   );
-  
+
   let buildinfos = buildinfo::get_build_infos(&buildinfo_path).await?;
-  
+
   if buildinfos.is_empty() {
     return Err(anyhow!(
       "No build info found in {:?}. Do you have WoW installed?",
@@ -238,7 +238,7 @@ async fn find_latest_imorph_entry(
 
   // Find the entry with the greatest imorph_version according to semantic versioning
   let parse_version = |v: &str| Version::parse(v).unwrap_or_else(|_| Version::new(0, 0, 0));
-  
+
   let max_index = entries
     .iter()
     .enumerate()
@@ -254,7 +254,7 @@ async fn find_latest_imorph_entry(
 /// Reads the version file and returns (imorph_version, wow_version)
 async fn read_version_file(version_path: &Path) -> Result<(String, String)> {
   info!(path = version_path.to_str(), "Opening version file");
-  
+
   match fs::File::open(version_path).await {
     Ok(mut file) => {
       let mut contents = String::new();
@@ -264,7 +264,7 @@ async fn read_version_file(version_path: &Path) -> Result<(String, String)> {
         contents
           .split_once("|")
           .map(|v| (v.0.to_string(), v.1.to_string()))
-          .unwrap_or((String::new(), String::new()))
+          .unwrap_or((String::new(), String::new())),
       )
     },
     Err(e) if e.kind() == io::ErrorKind::NotFound => Ok((String::new(), String::new())),
@@ -279,8 +279,7 @@ fn is_already_downloaded(
   entry: &ImorphEntry,
   buildinfo: &buildinfo::BuildInfoEntry,
 ) -> bool {
-  downloaded_imorph_version == entry.imorph_version
-    && downloaded_wow_version == buildinfo.version
+  downloaded_imorph_version == entry.imorph_version && downloaded_wow_version == buildinfo.version
 }
 
 /// Downloads and extracts the iMorph zip file
@@ -314,24 +313,23 @@ async fn update_version_file(version_path: &Path, entry: &ImorphEntry) -> Result
     version = entry.wow_version,
     "Updating version file"
   );
-  
+
   let mut file = fs::File::create(version_path)
     .await
     .context("Failed to create version file")?;
-  
+
   file
     .write_all(format!("{}|{}", entry.imorph_version, entry.wow_version).as_bytes())
     .await
     .context("Failed to write version data")?;
-  
+
   Ok(())
 }
 
 /// Runs the iMorph executable
 fn run_imorph(output_dir: &Path, cmd_path: &Path) -> Result<()> {
   info!(path = cmd_path.to_str(), "Running iMorph");
-  pty::run_command(output_dir, cmd_path, &[], "[imorph] ")
-    .context("Failed to run command")?;
+  pty::run_command(output_dir, cmd_path, &[], "[imorph] ").context("Failed to run command")?;
   Ok(())
 }
 
@@ -342,6 +340,7 @@ async fn run(cfg: &config::Config) -> Result<()> {
   let output_dir = Path::new(&cfg.output_directory);
   let buildinfo = get_wow_build_info(cfg.product).await?;
 
+  info!("Initializing mega client");
   let mh = mega_helper::MegaHelper::try_new(&cfg.mega_folder).await?;
   let entry = find_latest_imorph_entry(
     &mh,
@@ -357,7 +356,7 @@ async fn run(cfg: &config::Config) -> Result<()> {
     read_version_file(&version_path).await?;
 
   let cmd_path = output_dir.join("RuniMorph.exe");
-  
+
   if is_already_downloaded(
     &downloaded_imorph_version,
     &downloaded_wow_version,
