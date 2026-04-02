@@ -1,16 +1,25 @@
-use std::{fmt, fs::File as StdFile, io, path::Path, str::FromStr};
+use std::fmt;
+use std::fs::File as StdFile;
+use std::io;
+use std::path::Path;
+use std::str::FromStr;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::Context;
+use anyhow::Result;
+use anyhow::anyhow;
 use semver::Version;
-use serde::{Deserialize, Serialize};
-use time::{UtcOffset, macros::format_description};
-use tokio::{
-  fs,
-  io::{AsyncReadExt, AsyncWriteExt},
-};
-use tracing::{error, info};
+use serde::Deserialize;
+use serde::Serialize;
+use time::UtcOffset;
+use time::macros::format_description;
+use tokio::fs;
+use tokio::io::AsyncReadExt;
+use tokio::io::AsyncWriteExt;
+use tracing::error;
+use tracing::info;
 use tracing_subscriber::fmt::time::OffsetTime;
-use zip::{read::ZipArchive, result::ZipResult};
+use zip::read::ZipArchive;
+use zip::result::ZipResult;
 
 mod buildinfo;
 mod config;
@@ -154,13 +163,13 @@ fn init_tracing() {
 
 #[cfg(windows)]
 pub fn enable_ansi_support() -> Result<()> {
-  use windows::Win32::{
-    Foundation::HANDLE,
-    System::Console::{
-      CONSOLE_MODE, ENABLE_VIRTUAL_TERMINAL_PROCESSING, GetConsoleMode, GetStdHandle,
-      STD_OUTPUT_HANDLE, SetConsoleMode,
-    },
-  };
+  use windows::Win32::Foundation::HANDLE;
+  use windows::Win32::System::Console::CONSOLE_MODE;
+  use windows::Win32::System::Console::ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+  use windows::Win32::System::Console::GetConsoleMode;
+  use windows::Win32::System::Console::GetStdHandle;
+  use windows::Win32::System::Console::STD_OUTPUT_HANDLE;
+  use windows::Win32::System::Console::SetConsoleMode;
 
   unsafe {
     let handle: HANDLE = GetStdHandle(STD_OUTPUT_HANDLE)?;
@@ -380,7 +389,7 @@ async fn run(cfg: &config::Config) -> Result<()> {
 }
 
 /// Runs all commands configured for a given trigger
-fn run_commands_for_trigger(cfg: &config::Config, trigger: &str) {
+async fn run_commands_for_trigger(cfg: &config::Config, trigger: &str) {
   let commands = cfg.commands_for_trigger(trigger);
 
   if commands.is_empty() {
@@ -417,11 +426,11 @@ async fn main() {
 
   match run(&cfg).await {
     Ok(_) => {
-      run_commands_for_trigger(&cfg, "after_success");
+      run_commands_for_trigger(&cfg, "after_success").await;
     },
     Err(e) => {
       error!("{}", e);
-      run_commands_for_trigger(&cfg, "after_error");
+      run_commands_for_trigger(&cfg, "after_error").await;
     },
   };
 }
