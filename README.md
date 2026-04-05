@@ -11,12 +11,6 @@ iMorph-runner is a utility for managing and launching iMorph. It checks for upda
 - Supports multiple products (Retail, Classic, and Classic Era).
 - Support multiple regions (Global and China).
 
-## Prerequisites
-
-1. You must download and install [MEGAcmd](https://mega.io/cmd). Either ensure mega-get.bat is in your PATH, or configure mega_get to be the full path in config.toml.
-2. Login to mega using `mega-login --% "<username>" "<password>"`.
-3. Add the iMorph folder using `mega-import --% "https://mega.nz/folder/XQdwFJTR#X8VNWdap7eKtIvmPbpW6sA".`
-
 ## Installation
 
 Download the imorph-runner-\*.zip file from https://github.com/kdar/imorph-runner/releases/latest and unzip it somewhere.

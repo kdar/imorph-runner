@@ -17,7 +17,11 @@ use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use tracing::error;
 use tracing::info;
+use tracing::Level;
 use tracing_subscriber::fmt::time::OffsetTime;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::filter::LevelFilter;
 use zip::read::ZipArchive;
 use zip::result::ZipResult;
 
@@ -93,26 +97,15 @@ impl FromStr for Feature {
   }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug)]
 pub struct ImorphEntry {
-  feature: Feature,
+  // feature: Feature,
   wow_version: String,
   imorph_version: String,
-  region: Region,
-  product: Product,
-  handle: String,
+  // region: Region,
+  // product: Product,
+  node: megalib::Node,
 }
-
-// pub type RegionData = HashMap<String, Vec<ImorphEntry>>; // e.g., "Classic" -> Vec<ImorphEntry>
-// pub type RootData = HashMap<String, RegionData>; // e.g., "China" -> RegionData
-
-// static PRODUCT_MAP: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| {
-//   let mut map = HashMap::new();
-//   map.insert("retail", "wow");
-//   map.insert("classic", "wow_classic");
-//   map.insert("classic era", "wow_classic_era");
-//   map
-// });
 
 /// Extracts a zip file to the specified directory
 fn unzip_file(zip_path: impl AsRef<Path>, extract_to: &str) -> ZipResult<()> {
@@ -151,13 +144,40 @@ fn init_tracing() {
 
   let timer = OffsetTime::new(local_offset, timer_format);
 
-  tracing_subscriber::fmt()
-    // .with_max_level(tracing::Level::DEBUG)
-    .with_target(false)
-    .with_timer(timer)
-    .with_span_events(tracing_subscriber::fmt::format::FmtSpan::NONE)
-    // .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
-    .compact()
+  // Set up file logging in APPDATA
+  let appdata_dir = dirs::data_local_dir()
+    .unwrap_or_else(|| std::path::PathBuf::from("."))
+    .join("imorph-runner");
+
+  // Create the log directory if it doesn't exist
+  std::fs::create_dir_all(&appdata_dir).ok();
+
+  let file_appender = tracing_appender::rolling::never(&appdata_dir, "imorph-runner.log");
+  let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+
+  // Keep the guard alive for the duration of the program
+  std::mem::forget(_guard);
+
+  // Log to both file and terminal, with terminal filtered to INFO
+  let terminal_filter = LevelFilter::from_level(Level::INFO);
+
+  tracing_subscriber::registry()
+    .with(
+      tracing_subscriber::fmt::layer()
+        .with_writer(non_blocking)
+        .with_timer(timer.clone())
+        .with_span_events(tracing_subscriber::fmt::format::FmtSpan::NONE)
+        .with_ansi(false)
+        .compact(),
+    )
+    .with(
+      tracing_subscriber::fmt::layer()
+        .with_writer(std::io::stdout)
+        .with_timer(timer)
+        .with_span_events(tracing_subscriber::fmt::format::FmtSpan::NONE)
+        .compact(),
+    )
+    .with(terminal_filter)
     .init();
 }
 
@@ -307,7 +327,7 @@ async fn download_and_extract_imorph(
     wow_version = entry.wow_version,
     "Downloading iMorph"
   );
-  mh.download(&entry.handle, &download_path).await?;
+  mh.download(&entry.node, &download_path).await?;
 
   info!(path = download_path.to_str(), "Unzipping downloaded zip");
   unzip_file(&download_path, "download").context("Failed to unzip file")?;

@@ -1,24 +1,21 @@
 use std::path::Path;
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
+use anyhow::anyhow;
+use megalib::Node;
+use megalib::PublicFolder;
 use regex::Regex;
-use tokio::fs::File;
-use tokio_util::compat::TokioAsyncWriteCompatExt;
 
 pub struct MegaHelper {
-  nodes: mega::Nodes,
-  client: mega::Client,
+  folder: PublicFolder,
 }
 
 impl MegaHelper {
   pub async fn try_new(url: &str) -> Result<Self> {
-    let http_client = reqwest::Client::new();
-    let m = mega::Client::builder().build(http_client)?;
-    let nodes = m.fetch_public_nodes(url).await?;
+    let folder = megalib::open_folder(url).await?;
 
     Ok(Self {
-      nodes,
-      client: m,
+      folder,
     })
   }
 
@@ -36,20 +33,21 @@ impl MegaHelper {
       crate::Product::WoWBeta => "beta",
     };
 
-    let node = self
-      .nodes
-      .get_node_by_path(&format!("iMorph/{}", product_path))
-      .ok_or_else(|| anyhow!("could not find iMorph/{} path", product_path))?;
+    // Get root folder
+    let root = self
+      .folder
+      .nodes()
+      .first()
+      .ok_or_else(|| anyhow!("Unable to find root in public folder."))?;
+    let root_path = root.path().unwrap_or("/");
+    let path = format!("{}/{}", root_path, product_path);
 
     let app_regex = Regex::new(r"iMorph-([\d\.]+)(\((.*?)\))?\[(China)? ?([\d\.]+)\].zip")?;
     let mut all_downloads = vec![];
-    for child_handle in node.children() {
-      let n = self
-        .nodes
-        .get_node_by_handle(child_handle)
-        .ok_or_else(|| anyhow!("unable to get node by handle"))?;
 
-      let line = n.name();
+    // List all files in the product directory
+    for node in self.folder.list(&path, false) {
+      let line = node.name.clone();
       let Some(caps) = app_regex.captures(&line) else {
         return Err(anyhow!("regex failed to match iMorph line: {}", line));
       };
@@ -71,28 +69,21 @@ impl MegaHelper {
       }
 
       all_downloads.push(crate::ImorphEntry {
-        feature: entry_feature,
+        // feature: entry_feature,
         imorph_version: imorph_version.to_string(),
         wow_version: entry_wow_version.to_string(),
-        handle: n.handle().to_string(),
-        region: entry_region,
-        product,
+        node: node.clone(),
+        // region: entry_region,
+        // product,
       });
     }
 
     Ok(all_downloads)
   }
 
-  pub async fn download<P: AsRef<Path>>(&self, handle: &str, output_path: P) -> Result<()> {
-    let node = self
-      .nodes
-      .get_node_by_handle(handle)
-      .ok_or_else(|| anyhow!("unable to find node with handle\"{}\"", handle))?;
-    let file = File::create(output_path).await?;
-    self
-      .client
-      .download_node(node, &mut file.compat_write())
-      .await?;
+  pub async fn download<P: AsRef<Path>>(&self, node: &Node, output_path: P) -> Result<()> {
+    let mut file = std::fs::File::create(output_path)?;
+    self.folder.download(node, &mut file).await?;
     Ok(())
   }
 }
