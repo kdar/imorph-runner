@@ -15,13 +15,13 @@ use time::macros::format_description;
 use tokio::fs;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
+use tracing::Level;
 use tracing::error;
 use tracing::info;
-use tracing::Level;
+use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::fmt::time::OffsetTime;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::filter::LevelFilter;
 use zip::read::ZipArchive;
 use zip::result::ZipResult;
 
@@ -364,13 +364,26 @@ fn run_imorph(output_dir: &Path, cmd_path: &Path) -> Result<()> {
 
 async fn run(cfg: &config::Config) -> Result<()> {
   setup_environment()?;
+
+  let mega_folder = cfg.mega_folder.clone();
+  // Initialize mega client concurrency since it can take some time.
+  let mh_handle = tokio::spawn(async move {
+    info!("Initializing mega client");
+    let mh = mega_helper::MegaHelper::try_new(&mega_folder).await;
+    info!("Initialized mega client");
+    mh
+  });
+
   ensure_output_directory(&cfg.output_directory).await?;
-
   let output_dir = Path::new(&cfg.output_directory);
+  let version_path = output_dir.join("latest.txt");
   let buildinfo = get_wow_build_info(cfg.product).await?;
+  let cmd_path = output_dir.join("RuniMorph.exe");
 
-  info!("Initializing mega client");
-  let mh = mega_helper::MegaHelper::try_new(&cfg.mega_folder).await?;
+  let (downloaded_imorph_version, downloaded_wow_version) =
+    read_version_file(&version_path).await?;
+
+  let mh = mh_handle.await??;
   let entry = find_latest_imorph_entry(
     &mh,
     cfg.region,
@@ -379,12 +392,6 @@ async fn run(cfg: &config::Config) -> Result<()> {
     &buildinfo.version,
   )
   .await?;
-
-  let version_path = output_dir.join("latest.txt");
-  let (downloaded_imorph_version, downloaded_wow_version) =
-    read_version_file(&version_path).await?;
-
-  let cmd_path = output_dir.join("RuniMorph.exe");
 
   if is_already_downloaded(
     &downloaded_imorph_version,
@@ -401,8 +408,12 @@ async fn run(cfg: &config::Config) -> Result<()> {
     return Ok(());
   }
 
-  download_and_extract_imorph(&mh, &entry, output_dir).await?;
-  update_version_file(&version_path, &entry).await?;
+  let (res1, res2) = tokio::join!(
+    download_and_extract_imorph(&mh, &entry, output_dir),
+    update_version_file(&version_path, &entry)
+  );
+  res1?;
+  res2?;
   run_imorph(output_dir, &cmd_path)?;
 
   Ok(())
