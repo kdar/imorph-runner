@@ -31,6 +31,7 @@ impl MegaHelper {
       crate::Product::WoWClassic => "classic",
       crate::Product::WoWClassicEra => "cata",
       crate::Product::WoWBeta => "beta",
+      crate::Product::WoWXPtr => "xptr",
     };
 
     // Get root folder

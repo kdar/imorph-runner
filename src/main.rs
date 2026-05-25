@@ -61,6 +61,8 @@ enum Product {
   WoWClassicEra,
   #[serde(rename = "wow_beta")]
   WoWBeta,
+  #[serde(rename = "wowxptr")]
+  WoWXPtr,
 }
 
 impl fmt::Display for Product {
@@ -70,6 +72,7 @@ impl fmt::Display for Product {
       Product::WoWClassic => write!(f, "wow_classic"),
       Product::WoWClassicEra => write!(f, "wow_classic_era"),
       Product::WoWBeta => write!(f, "wow_beta"),
+      Product::WoWXPtr => write!(f, "wowxptr"),
     }
   }
 }
