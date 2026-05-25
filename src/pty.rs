@@ -1,8 +1,27 @@
-use std::{ffi::OsStr, io::Read, path::Path, process::Command, sync::mpsc, thread, time::Duration};
+use std::ffi::OsStr;
+use std::io::Read;
+use std::path::Path;
+use std::process::Command;
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
 use conpty::Process;
 use regex::Regex;
 use tracing::info;
+
+fn strip_osc(s: &str) -> String {
+  // OSC sequences: ESC ] number ; text BEL (or ESC \)
+  let osc_re = Regex::new(r"\x1b\][0-9]+;[^\x07\x1b]*(\x07|\x1b\\)").unwrap();
+  osc_re.replace_all(s, "").to_string()
+}
+
+fn strip_ansi(s: &str) -> String {
+  Regex::new(r"\x1b\[([\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e])")
+    .unwrap()
+    .replace_all(s, "")
+    .to_string()
+}
 
 pub fn run_command<P: AsRef<Path>>(
   cwd: P,
@@ -16,8 +35,6 @@ pub fn run_command<P: AsRef<Path>>(
 
   let mut proc = Process::spawn(cmd)?;
   let mut reader = proc.output()?;
-
-  let ansi_re = Regex::new(r"\x1b\[[0-9;]*[a-zA-Z]")?;
 
   let (tx, rx) = mpsc::channel();
 
@@ -52,7 +69,7 @@ pub fn run_command<P: AsRef<Path>>(
           line_buffer.push(byte);
           if byte == b'\n' {
             let line = String::from_utf8_lossy(&line_buffer);
-            let clean = ansi_re.replace_all(&line, "");
+            let clean = strip_osc(&strip_ansi(&line));
             info!(
               "{}{}",
               log_prefix,
@@ -76,7 +93,7 @@ pub fn run_command<P: AsRef<Path>>(
   // Flush remaining buffer
   if !line_buffer.is_empty() {
     let line = String::from_utf8_lossy(&line_buffer);
-    let clean = ansi_re.replace_all(&line, "");
+    let clean = strip_ansi(&line);
     info!("{}{}", log_prefix, clean.trim_end());
   }
 
