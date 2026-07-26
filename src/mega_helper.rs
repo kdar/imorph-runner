@@ -5,6 +5,7 @@ use anyhow::anyhow;
 use megalib::Node;
 use megalib::PublicFolder;
 use regex::Regex;
+use tracing::warn;
 
 pub struct MegaHelper {
   folder: PublicFolder,
@@ -22,16 +23,21 @@ impl MegaHelper {
   pub async fn fetch_entries(
     &self,
     region: crate::Region,
-    product: crate::Product,
+    product: &crate::Product,
     feature: crate::Feature,
     wow_version: &str,
   ) -> Result<Vec<crate::ImorphEntry>> {
     let product_path = match product {
-      crate::Product::WoW => "retail",
-      crate::Product::WoWClassic => "classic",
-      crate::Product::WoWClassicEra => "cata",
-      crate::Product::WoWBeta => "beta",
-      crate::Product::WoWXPtr => "xptr",
+      crate::Product::WoW => "retail".to_string(),
+      crate::Product::WoWClassic => "classic".to_string(),
+      crate::Product::WoWClassicEra => "cata".to_string(),
+      crate::Product::WoWBeta => "beta".to_string(),
+      crate::Product::WoWXPtr => "xptr".to_string(),
+      crate::Product::WoWT => "wowt".to_string(),
+      crate::Product::Unknown(raw) => {
+        warn!("Unknown WoW variant from iMorph: {}", raw);
+        format!("unknown({})", raw)
+      },
     };
 
     // Get root folder

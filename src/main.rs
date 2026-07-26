@@ -51,7 +51,7 @@ impl FromStr for Region {
   }
 }
 
-#[derive(PartialEq, Eq, Copy, Clone, Debug, Deserialize, Serialize)]
+#[derive(PartialEq, Eq, Clone, Debug, Deserialize, Serialize)]
 enum Product {
   #[serde(rename = "wow")]
   WoW,
@@ -63,6 +63,10 @@ enum Product {
   WoWBeta,
   #[serde(rename = "wowxptr")]
   WoWXPtr,
+  #[serde(rename = "wowt")]
+  WoWT,
+  #[serde(untagged)]
+  Unknown(String),
 }
 
 impl fmt::Display for Product {
@@ -73,6 +77,8 @@ impl fmt::Display for Product {
       Product::WoWClassicEra => write!(f, "wow_classic_era"),
       Product::WoWBeta => write!(f, "wow_beta"),
       Product::WoWXPtr => write!(f, "wowxptr"),
+      Product::WoWT => write!(f, "wowt"),
+      Product::Unknown(raw) => write!(f, "unknown({})", raw),
     }
   }
 }
@@ -223,7 +229,7 @@ async fn ensure_output_directory(path: &str) -> Result<()> {
 }
 
 /// Retrieves the WoW build info for the specified product
-async fn get_wow_build_info(product: Product) -> Result<buildinfo::BuildInfoEntry> {
+async fn get_wow_build_info(product: &Product) -> Result<buildinfo::BuildInfoEntry> {
   info!("Finding WoW install path");
   let install_path = buildinfo::find_wow_install_path(product)?;
   let buildinfo_path = install_path.join(".build.info");
@@ -244,7 +250,7 @@ async fn get_wow_build_info(product: Product) -> Result<buildinfo::BuildInfoEntr
 
   buildinfos
     .into_iter()
-    .find(|v| v.product == product)
+    .find(|v| v.product == *product)
     .ok_or_else(|| anyhow!("Could not find product: {}", product))
 }
 
@@ -252,7 +258,7 @@ async fn get_wow_build_info(product: Product) -> Result<buildinfo::BuildInfoEntr
 async fn find_latest_imorph_entry(
   mh: &mega_helper::MegaHelper,
   region: Region,
-  product: Product,
+  product: &Product,
   feature: Feature,
   wow_version: &str,
 ) -> Result<ImorphEntry> {
@@ -380,7 +386,7 @@ async fn run(cfg: &config::Config) -> Result<()> {
   ensure_output_directory(&cfg.output_directory).await?;
   let output_dir = Path::new(&cfg.output_directory);
   let version_path = output_dir.join("latest.txt");
-  let buildinfo = get_wow_build_info(cfg.product).await?;
+  let buildinfo = get_wow_build_info(&cfg.product).await?;
   let cmd_path = output_dir.join("RuniMorph.exe");
 
   let (downloaded_imorph_version, downloaded_wow_version) =
@@ -390,7 +396,7 @@ async fn run(cfg: &config::Config) -> Result<()> {
   let entry = find_latest_imorph_entry(
     &mh,
     cfg.region,
-    cfg.product,
+    &cfg.product,
     cfg.feature,
     &buildinfo.version,
   )

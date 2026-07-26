@@ -1,12 +1,17 @@
-use std::{
-  env, fs,
-  path::{Path, PathBuf},
-};
+use std::env;
+use std::fs;
+use std::path::Path;
+use std::path::PathBuf;
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
+use anyhow::anyhow;
 use csv::ReaderBuilder;
 use serde::Deserialize;
-use tokio::{fs::File, io::AsyncReadExt};
+use tokio::fs::File;
+use tokio::io::AsyncReadExt;
+use tracing::warn;
+
+use crate::Product;
 
 #[derive(Debug, Deserialize)]
 pub struct BuildInfoEntry {
@@ -36,7 +41,7 @@ pub struct BuildInfoEntry {
 //   Ok(p.parent().unwrap().to_owned())
 // }
 
-pub fn find_wow_install_path(product: crate::Product) -> Result<PathBuf> {
+pub fn find_wow_install_path(product: &crate::Product) -> Result<PathBuf> {
   let pd = match env::var("PROGRAMDATA") {
     Ok(path) => path,
     Err(e) => {
@@ -82,6 +87,12 @@ pub async fn get_build_infos<P: AsRef<Path>>(path: P) -> Result<Vec<BuildInfoEnt
   let records = rdr
     .deserialize()
     .collect::<Result<Vec<BuildInfoEntry>, _>>()?;
+
+  for record in &records {
+    if let Product::Unknown(raw) = &record.product {
+      warn!("Unknown WoW variant from buildinfo: {}", raw);
+    }
+  }
 
   Ok(records)
 }
