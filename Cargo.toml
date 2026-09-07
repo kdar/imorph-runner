@@ -3,31 +3,28 @@ name = "imorph-runner"
 version = "0.1.4"
 edition = "2024"
 authors = ["Kevin Darlington <kevin@outroot.com>"]
-readme = "README.md"
 repository = "https://github.com/kdar/imorph-runner"
-homepage = "https://github.com/kdar/imorph-runner"
 license-file = "LICENSE"
 keywords = ["imorph", "updater", "runner"]
 build = "build.rs"
 
 [build-dependencies]
-prost-build = "0.14.3"
+prost-build = "0.14.4"
 winresource = "0.1.31"
 
 [dependencies]
-megalib = "0.11"
-tokio = { version = "1.52.3", features = ["full"] }
-reqwest = { version = "0.13.4", features = ["json"] }
+megalib = { git = "https://github.com/kdar/megalib.git", branch = "fix-multiple-keys-public-nodes" }
+tokio = { version = "1.53.1", features = ["full", "macros", "rt-multi-thread"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1.0.150"
+serde_json = "1.0.151"
 zip = "8.6.0"
-toml = "1.1.2"
+toml = "1.1.5"
 anyhow = "1"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["fmt", "local-time"] }
 tracing-appender = "0.2.5"
 dirs = "6"
-time = { version = "0.3.47", features = ["macros"] }
+time = { version = "0.3.55", features = ["macros"] }
 windows = { version = "0.62", features = [
   "Win32_System_Console",
   "Win32_Foundation",
@@ -35,14 +32,10 @@ windows = { version = "0.62", features = [
   "Win32_System_Pipes",
   "Win32_Security",
 ] }
-windows-registry = "0.6"
 conpty = "0.7.0"
-strip-ansi = "0.1"
-regex = "1.12.3"
-goblin = "0.10.6"
-memmap2 = "0.9.10"
+regex = "1.13.1"
 csv = "1.4.0"
-prost = "0.14.3"
+prost = "0.14.4"
 semver = "1.0.28"
 # The profile that 'dist' will build with
 [profile.dist]
