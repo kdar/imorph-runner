@@ -214,7 +214,7 @@ pub fn enable_ansi_support() -> Result<()> {
 /// Sets up the environment (ANSI support, tracing)
 fn setup_environment() -> Result<()> {
   #[cfg(windows)]
-  enable_ansi_support()?;
+  let _ = enable_ansi_support();
   init_tracing();
   Ok(())
 }
@@ -289,8 +289,8 @@ async fn find_latest_imorph_entry(
   Ok(entries.remove(max_index))
 }
 
-/// Reads the version file and returns (imorph_version, wow_version)
-async fn read_version_file(version_path: &Path) -> Result<(String, String)> {
+/// Reads the version file and returns (imorph_version, wow_version, handle)
+async fn read_version_file(version_path: &Path) -> Result<(String, String, String)> {
   info!(path = version_path.to_str(), "Opening version file");
 
   match fs::File::open(version_path).await {
@@ -298,14 +298,22 @@ async fn read_version_file(version_path: &Path) -> Result<(String, String)> {
       let mut contents = String::new();
       file.read_to_string(&mut contents).await?;
       let contents = contents.trim().to_string();
-      Ok(
-        contents
-          .split_once("|")
-          .map(|v| (v.0.to_string(), v.1.to_string()))
-          .unwrap_or((String::new(), String::new())),
-      )
+      let parts: Vec<&str> = contents.split('|').collect();
+      if parts.len() >= 3 {
+        Ok((
+          parts[0].to_string(),
+          parts[1].to_string(),
+          parts[2].to_string(),
+        ))
+      } else if parts.len() >= 2 {
+        Ok((parts[0].to_string(), parts[1].to_string(), String::new()))
+      } else {
+        Ok((String::new(), String::new(), String::new()))
+      }
     },
-    Err(e) if e.kind() == io::ErrorKind::NotFound => Ok((String::new(), String::new())),
+    Err(e) if e.kind() == io::ErrorKind::NotFound => {
+      Ok((String::new(), String::new(), String::new()))
+    },
     Err(e) => Err(anyhow!(e)),
   }
 }
@@ -314,10 +322,18 @@ async fn read_version_file(version_path: &Path) -> Result<(String, String)> {
 fn is_already_downloaded(
   downloaded_imorph_version: &str,
   downloaded_wow_version: &str,
+  downloaded_handle: &str,
   entry: &ImorphEntry,
   buildinfo: &buildinfo::BuildInfoEntry,
 ) -> bool {
-  downloaded_imorph_version == entry.imorph_version && downloaded_wow_version == buildinfo.version
+  if downloaded_handle.is_empty() {
+    // Force a re-download if we don't have a handle recorded,
+    // to handle cases where the mega node was updated without bumping versions.
+    return false;
+  }
+  downloaded_imorph_version == entry.imorph_version
+    && downloaded_wow_version == buildinfo.version
+    && downloaded_handle == entry.node.handle
 }
 
 /// Downloads and extracts the iMorph zip file
@@ -357,7 +373,13 @@ async fn update_version_file(version_path: &Path, entry: &ImorphEntry) -> Result
     .context("Failed to create version file")?;
 
   file
-    .write_all(format!("{}|{}", entry.imorph_version, entry.wow_version).as_bytes())
+    .write_all(
+      format!(
+        "{}|{}|{}",
+        entry.imorph_version, entry.wow_version, entry.node.handle
+      )
+      .as_bytes(),
+    )
     .await
     .context("Failed to write version data")?;
 
@@ -389,7 +411,7 @@ async fn run(cfg: &config::Config) -> Result<()> {
   let buildinfo = get_wow_build_info(&cfg.product).await?;
   let cmd_path = output_dir.join("RuniMorph.exe");
 
-  let (downloaded_imorph_version, downloaded_wow_version) =
+  let (downloaded_imorph_version, downloaded_wow_version, downloaded_handle) =
     read_version_file(&version_path).await?;
 
   let mh = mh_handle.await??;
@@ -405,6 +427,7 @@ async fn run(cfg: &config::Config) -> Result<()> {
   if is_already_downloaded(
     &downloaded_imorph_version,
     &downloaded_wow_version,
+    &downloaded_handle,
     &entry,
     &buildinfo,
   ) {
